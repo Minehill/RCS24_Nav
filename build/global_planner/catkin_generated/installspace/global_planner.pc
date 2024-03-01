@@ -1,0 +1,8 @@
+prefix=/home/jason/Project/github/RCS24_Nav/install
+
+Name: global_planner
+Description: Description of global_planner
+Version: 0.0.0
+Cflags: -I${prefix}/include
+Libs: -L${prefix}/lib 
+Requires: geometry_msgs nav_msgs roscpp rospy
