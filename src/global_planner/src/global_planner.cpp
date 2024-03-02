@@ -9,7 +9,6 @@
 const int cost = 1;
 
 std::vector<std::vector<int>> map;
-std::vector<std::vector<int>> table;
 
 int width, height;
 float resolution;
@@ -18,9 +17,10 @@ int origin_x, origin_y;
 struct Point{
     int x,y;
     int g,h,f;
+    Point* parent;
 
     Point(int x = -1, int y = -1, int g = 0, int h = 0, int f = 0) 
-        : x(x), y(y), g(g), h(h), f(f) {}
+        : x(x), y(y), g(g), h(h), f(f), parent(nullptr) {}
 };
 Point startPoint,endPoint;
 
@@ -40,76 +40,89 @@ void MapCallback(const nav_msgs::OccupancyGrid::ConstPtr& msg){
     ROS_INFO("Map is loaded! Map info: width = %d, height = %d, resolution = %f, origin_x = %d, origin_y = %d", width, height, resolution, origin_x, origin_y);
 }
 
-std::vector<Point> getNeighbors(Point* p){
-    std::vector<Point> neighbors;
+std::vector<Point*> getNeighbors(Point* p){
+    std::vector<Point*> neighbors;
     for(int i=-1;i<=1;i++){
         for(int j=-1;j<=1;j++){
             if(i == 0 && j == 0) continue;
-            Point next;
-            next.x = p->x + i;
-            next.y = p->y + j;
-            neighbors.push_back(next);
+            neighbors.push_back(new Point(p->x + i, p->y + j));
         }
     }
     return neighbors;
 }
 
-bool getPath(Point* start, Point* end){
-    table.resize(width, std::vector<int>(height, 0));
+std::vector<Point*> getPath(Point* start, Point* end){
+    // 初始化table，0-未访问，-1-已访问（在closelist中），>0-代价g
+    std::vector<std::vector<int>> table(width, std::vector<int>(height));
+    for(auto& row : table) {
+        std::fill(row.begin(), row.end(), 0);
+    }
 
-    std::priority_queue<Point, std::vector<Point>, bool(*)(Point, Point)> openList([](Point a, Point b){return a.f < b.f;});
-    openList.push(*start);
-    table[start->x][start->y] = start->f;
+    std::priority_queue<Point*, std::vector<Point*>, bool(*)(Point*, Point*)> openList([](Point* a, Point* b){return a->f > b->f;});
+    openList.push(start);
+    table[start->x][start->y] = start->g;
 
     while(!openList.empty()){
         // 取出f值最小的点
-        Point current = openList.top();
-        
-        // 判断是否达到目标点
-        if(table[end->x][end->y] == 1){
-            ROS_INFO("Path found!");
-            return true;
-        }
+        Point* current = openList.top();
         
         // 将当前点放入closelist中
         openList.pop();
-        table[current.x][current.y] = -1;
+        table[current->x][current->y] = -1;
+
+        // 判断当前点是否目标点
+        if(current->x == end->x && current->y == end->y){
+            ROS_INFO("Path found!");
+            // 回溯路径
+            end->parent = current;
+            std::vector<Point*> path;
+            Point* p = end;
+            while(p){
+                path.push_back(p);
+                p = p->parent;
+            }
+            ROS_INFO("path's length is : %ld", path.size());
+            return path;
+        }
 
         // 获取周围点
-        std::vector<Point> neighbors = getNeighbors(&current);
+        std::vector<Point*> neighbors = getNeighbors(current);
 
         // 遍历周围点
         for(auto neighbor : neighbors){
             // 判断是否在网格内
-            if(neighbor.x < 0 || neighbor.x >= width || neighbor.y < 0 || neighbor.y >= height) continue;
+            if(neighbor->x < 0 || neighbor->x >= width || neighbor->y < 0 || neighbor->y >= height) continue;
 
             // 判断是否是障碍物
-            if(map[neighbor.x][neighbor.y] == 100) continue;
+            if(map[neighbor->x][neighbor->y] == 100) continue;
 
             // 判断是否在closelist中
-            if(table[neighbor.x][neighbor.y] == -1) continue;
+            if(table[neighbor->x][neighbor->y] == -1) continue;
 
             // 计算代价
-            neighbor.g = current.g + cost;
-            neighbor.h = abs(neighbor.x - end->x) + abs(neighbor.y - end->y);
-            neighbor.f = neighbor.g + neighbor.h;
+            neighbor->g = current->g + cost;
+            neighbor->h = abs(neighbor->x - end->x) + abs(neighbor->y - end->y);
+            neighbor->f = neighbor->g + neighbor->h;
+            neighbor->parent = current;
 
             // 判断否在openlist中，如果在，需要比较当前是否更优
-            if(table[neighbor.x][neighbor.y] > 0){
-                if(neighbor.f < table[neighbor.x][neighbor.y])
-                    table[neighbor.x][neighbor.y] = neighbor.f;
+            if(table[neighbor->x][neighbor->y] > 0){
+                if(neighbor->g < table[neighbor->x][neighbor->y]){
+                    table[neighbor->x][neighbor->y] = neighbor->g;
+                    neighbor->parent = current;
+                }
             }
             // 如果不在openlist中，将其放入openlist
             else{
                 openList.push(neighbor);
-                table[neighbor.x][neighbor.y] = neighbor.f;
+                table[neighbor->x][neighbor->y] = neighbor->g;
             }
 
         }
         
     }
     ROS_INFO("Path not found!");
-    return false;
+    return {};
 }
 
 void InitPoseCallback(const geometry_msgs::PoseWithCovarianceStamped msg){
@@ -139,7 +152,20 @@ int main(int argc, char** argv){
     while(ros::ok()){
         if(map.size() > 0){
             if(startPoint.x != -1 && startPoint.y != -1 && endPoint.x != -1 && endPoint.y != -1){
-                getPath(&startPoint, &endPoint);
+                std::vector<Point*> path = getPath(&startPoint, &endPoint);
+                if(path.size() > 0){
+                    nav_msgs::Path path_msg;
+                    path_msg.header.stamp = ros::Time::now();
+                    path_msg.header.frame_id = "map";
+                    for(auto it = path.rbegin(); it != path.rend(); it++){
+                        geometry_msgs::PoseStamped pose;
+                        pose.pose.position.x = ((*it)->y - origin_y) * resolution;
+                        pose.pose.position.y = ((*it)->x - origin_x) * resolution;
+                        pose.pose.orientation.w = 1;
+                        path_msg.poses.push_back(pose);
+                    }
+                    path_pub.publish(path_msg);
+                }
             }
         }
         ros::spinOnce();
