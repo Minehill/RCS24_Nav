@@ -31,12 +31,32 @@ void MapCallback(const nav_msgs::OccupancyGrid::ConstPtr& msg){
     resolution = msg->info.resolution;
     origin_x = -msg->info.origin.position.y / resolution;
     origin_y = -msg->info.origin.position.x / resolution;
+    
+    // lzt:进行1个网格的膨胀处理
     for(int i=0;i<width;i++) map.push_back(std::vector<int>());
 	for(int i=0;i<width;i++){
 		for(int j=0;j<height;j++){
 			map[i].push_back(msg->data[j*width+i]);
 		}
 	}
+	
+    for(int i = 0; i < width; i++){
+    	for (int j = 0; j < height; j++){
+    		if (map[i][j] == 100){
+    			for (int a = -1; a <= 1; a++){
+    				for (int b = -1; b <= 1; b++){
+    					if (i+a >= width || j+b >= height || i+a < 0 || j+b < 0)
+    						continue;
+    					if (a != 0 && b != 0)
+    						continue;
+    					if (map[i+a][j+b] == 0)
+    						map[i+a][j+b] = 50;
+    				}
+    			}
+    		}
+    	    }
+    	}
+    	
     ROS_INFO("Map is loaded! Map info: width = %d, height = %d, resolution = %f, origin_x = %d, origin_y = %d", width, height, resolution, origin_x, origin_y);
 }
 
@@ -95,7 +115,7 @@ std::vector<Point*> getPath(Point* start, Point* end){
             if(neighbor->x < 0 || neighbor->x >= width || neighbor->y < 0 || neighbor->y >= height) continue;
 
             // 判断是否是障碍物
-            if(map[neighbor->y][neighbor->x] == 100) continue;
+            if(map[neighbor->y][neighbor->x] == 100 || map[neighbor->y][neighbor->x] == 50) 		continue;
 
             // 判断是否在closelist中
             if(table[neighbor->x][neighbor->y] == -1) continue;
@@ -150,6 +170,9 @@ int main(int argc, char** argv){
     ros::Publisher path_pub = nh.advertise<nav_msgs::Path>("/global_path", 1);
 
     ros::Rate loop_rate(10);
+    
+    // lzt:让我试试，把你注释
+    /*
     while(ros::ok()){
         if(map.size() > 0){
             if(startPoint.x != -1 && startPoint.y != -1 && endPoint.x != -1 && endPoint.y != -1){
@@ -171,6 +194,43 @@ int main(int argc, char** argv){
         }
         ros::spinOnce();
         loop_rate.sleep();
+    }*/
+  
+    // lzt:开始我的表演
+    while(ros::ok()){
+    if(map.size() > 0){
+        if(startPoint.x != -1 && startPoint.y != -1 && endPoint.x != -1 && endPoint.y != -1){
+            std::vector<Point*> path = getPath(&startPoint, &endPoint);
+            std::vector<Point*> my_path;
+            int j = 0;
+            for (int i = 1; i < path.size(); ++i) {
+                if (i == path.size() - 1 || i - j == 10 ||
+        (i-j > 5 &&path[i]->x != path[i-1]->x && path[i]->y != path[i+1]->y && i+1 < path.size()) ||
+        (i-j > 5 &&path[i]->y != path[i-1]->y && path[i]->x != path[i+1]->x && i+1 < path.size())) {
+                        my_path.push_back(path[i]);
+                        j = i;
+                }
+            }
+
+            if(my_path.size() > 0){
+                nav_msgs::Path path_msg;
+                path_msg.header.stamp = ros::Time::now();
+                path_msg.header.frame_id = "map";
+                for(auto it = my_path.rbegin(); it != my_path.rend(); it++){
+                    geometry_msgs::PoseStamped pose;
+                    pose.pose.position.x = ((*it)->y - origin_y) * resolution;
+                    pose.pose.position.y = ((*it)->x - origin_x) * resolution;
+                    pose.pose.orientation.w = 1;
+                    path_msg.poses.push_back(pose);
+                }
+                path_pub.publish(path_msg); // 发布路径消息
+            }
+        }
     }
+    ros::spinOnce();
+    loop_rate.sleep();
+}
+
     return 0;
+
 }
