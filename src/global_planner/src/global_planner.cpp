@@ -45,6 +45,7 @@ std::vector<Point*> getNeighbors(Point* p){
     for(int i=-1;i<=1;i++){
         for(int j=-1;j<=1;j++){
             if(i == 0 && j == 0) continue;
+            if(i != 0 && j != 0) continue;
             neighbors.push_back(new Point(p->x + i, p->y + j));
         }
     }
@@ -94,7 +95,7 @@ std::vector<Point*> getPath(Point* start, Point* end){
             if(neighbor->x < 0 || neighbor->x >= width || neighbor->y < 0 || neighbor->y >= height) continue;
 
             // 判断是否是障碍物
-            if(map[neighbor->x][neighbor->y] == 100) continue;
+            if(map[neighbor->y][neighbor->x] == 100) continue;
 
             // 判断是否在closelist中
             if(table[neighbor->x][neighbor->y] == -1) continue;
